@@ -1,3 +1,11 @@
+RETURN SEQUENCE
+
+1. Read SYSTEM_MAP.md
+2. Read CHECKPOINT.md
+3. Start server
+4. Open Gmail
+5. Test suggestion panel
+
 # SupportAssist System Map (15-second brain reload)
 
 If returning to this project after time away,
