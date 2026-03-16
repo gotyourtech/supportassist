@@ -1,6 +1,6 @@
 (async function () {
-const SERVER = "https://supportassist.begoodvpn.com/suggest";
-const FEEDBACK_SERVER = "https://supportassist.begoodvpn.com/feedback";
+  const SERVER = "https://supportassist.begoodvpn.com/suggest";
+  const FEEDBACK_SERVER = "https://supportassist.begoodvpn.com/feedback";
   const TIMEOUT_MS = 10000;
 
   const SELF_SENDER_HINTS = [
@@ -74,7 +74,7 @@ const FEEDBACK_SERVER = "https://supportassist.begoodvpn.com/feedback";
       document.querySelector("div[role='textbox']");
 
     if (!editable) {
-      alert("Open a reply box first, then click Insert Link.");
+      alert("Open a reply box first.");
       return;
     }
 
@@ -173,7 +173,7 @@ const FEEDBACK_SERVER = "https://supportassist.begoodvpn.com/feedback";
       return await res.json();
     } catch (err) {
       if (err && err.name === "AbortError") {
-        throw new Error(`Timeout (${TIMEOUT_MS / 1000}s) — local AI server not responding`);
+        throw new Error("AI server timeout");
       }
       throw err;
     } finally {
@@ -230,12 +230,12 @@ const FEEDBACK_SERVER = "https://supportassist.begoodvpn.com/feedback";
 
       <div style="margin-top:8px;">
         <button id="kb-run" style="width:100%;padding:8px;border:none;border-radius:8px;cursor:pointer;background:#1a73e8;color:white;font-weight:700;">
-          Suggest Articles (Manual)
+          Suggest Articles
         </button>
       </div>
 
       <div style="margin-top:8px;color:#666;font-size:12px;">
-        Auto-run triggers only on support-looking emails. Toggle panel: press <b>Z</b> (when not typing)
+        Auto-run triggers on support-looking emails. Toggle panel: press <b>Z</b>
       </div>
 
       <div id="kb-status" style="margin-top:10px;color:#555;"></div>
@@ -255,7 +255,7 @@ const FEEDBACK_SERVER = "https://supportassist.begoodvpn.com/feedback";
     const status = panel.querySelector("#kb-status");
     const results = panel.querySelector("#kb-results");
 
-    status.textContent = `Confidence: ${data.confidence} (score ${data.best_score}, gap ${data.gap})`;
+    status.textContent = `Confidence: ${data.confidence}`;
     results.innerHTML = "";
 
     if (!data.results || !data.results.length) {
@@ -271,15 +271,19 @@ const FEEDBACK_SERVER = "https://supportassist.begoodvpn.com/feedback";
 
       div.innerHTML = `
         <div style="font-weight:700;">${idx + 1}. ${escapeHtml(r.title)}</div>
+        <div style="font-size:11px;color:#666;">Matched customer text</div>
         <div style="margin-top:4px;word-break:break-all;">
           <a href="${r.url}" target="_blank" rel="noreferrer">${r.url}</a>
         </div>
-        <div style="margin-top:6px;display:flex;gap:8px;">
+        <div style="margin-top:6px;display:flex;gap:8px;align-items:center;">
           <button style="flex:1;padding:6px 8px;border:none;border-radius:8px;background:#34a853;color:white;cursor:pointer;font-weight:700;">
-            Insert Link
+            INSERT
           </button>
-          <button style="flex:1;padding:6px 8px;border:1px solid #ccc;border-radius:8px;background:#fff;cursor:pointer;">
-            Copy Link
+          <button style="padding:6px 12px;border:1px solid #ccc;border-radius:8px;background:#fff;cursor:pointer;">
+            VIEW
+          </button>
+          <button style="padding:6px 12px;border:1px solid #ccc;border-radius:8px;background:#fff;cursor:pointer;">
+            COPY
           </button>
         </div>
       `;
@@ -291,7 +295,9 @@ const FEEDBACK_SERVER = "https://supportassist.begoodvpn.com/feedback";
         await sendFeedback(getEmailTextForAI(), r.id);
       };
 
-      buttons[1].onclick = () => copyToClipboard(r.url);
+      buttons[1].onclick = () => window.open(r.url, "_blank", "noopener,noreferrer");
+
+      buttons[2].onclick = () => copyToClipboard(r.url);
 
       results.appendChild(div);
     });
@@ -343,6 +349,27 @@ const FEEDBACK_SERVER = "https://supportassist.begoodvpn.com/feedback";
     }
   }
 
+  function tryAutoRunNow() {
+    const panel = document.getElementById("kb-suggest-panel");
+    if (!panel) return;
+
+    const sig = computeThreadSignature();
+    if (!sig) return;
+
+    if (sig !== lastAutoSignature) {
+      lastAutoSignature = sig;
+    }
+
+    if (looksLikeSupportEmail()) {
+      runSuggestions("auto");
+    } else {
+      const status = panel.querySelector("#kb-status");
+      const results = panel.querySelector("#kb-results");
+      if (status) status.textContent = "Auto: skipped (not a support email).";
+      if (results) results.innerHTML = "";
+    }
+  }
+
   document.addEventListener("keydown", (e) => {
     if (isTypingContext(document.activeElement)) return;
 
@@ -353,6 +380,7 @@ const FEEDBACK_SERVER = "https://supportassist.begoodvpn.com/feedback";
       } else {
         ensurePanel();
         refreshReadyUI();
+        setTimeout(tryAutoRunNow, 300);
       }
     }
   });
@@ -376,7 +404,7 @@ const FEEDBACK_SERVER = "https://supportassist.begoodvpn.com/feedback";
         } else {
           const status = panel.querySelector("#kb-status");
           const results = panel.querySelector("#kb-results");
-          if (status) status.textContent = "Auto: skipped (not a support email). Use Manual button if needed.";
+          if (status) status.textContent = "Auto: skipped (not a support email).";
           if (results) results.innerHTML = "";
         }
       }
@@ -386,6 +414,7 @@ const FEEDBACK_SERVER = "https://supportassist.begoodvpn.com/feedback";
   setTimeout(() => {
     ensurePanel();
     refreshReadyUI();
+    setTimeout(tryAutoRunNow, 300);
   }, 3000);
 
   startAutoRunLoop();
