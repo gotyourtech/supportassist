@@ -1,8 +1,7 @@
 (async function () {
-  const SERVER = "http://127.0.0.1:8787/suggest";
-  const TIMEOUT_MS = 4000;
-
-  const STORAGE_KEY_NAME = "supportassist_api_key";
+const SERVER = "https://supportassist.begoodvpn.com/suggest";
+const FEEDBACK_SERVER = "https://supportassist.begoodvpn.com/feedback";
+  const TIMEOUT_MS = 10000;
 
   const SELF_SENDER_HINTS = [
     "robert bidgood",
@@ -25,8 +24,13 @@
     "renew", "renewal", "payment", "etransfer", "e-transfer", "transfer"
   ];
 
-  function safeText(el) { return (el?.innerText || "").trim(); }
-  function normalize(s) { return (s || "").toLowerCase().replace(/\s+/g, " ").trim(); }
+  function safeText(el) {
+    return (el?.innerText || "").trim();
+  }
+
+  function normalize(s) {
+    return (s || "").toLowerCase().replace(/\s+/g, " ").trim();
+  }
 
   function isSelfSender(senderTextRaw) {
     const sender = normalize(senderTextRaw);
@@ -52,11 +56,15 @@
   }
 
   async function copyToClipboard(text) {
-    try { await navigator.clipboard.writeText(text); }
-    catch {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
       const ta = document.createElement("textarea");
-      ta.value = text; document.body.appendChild(ta);
-      ta.select(); document.execCommand("copy"); ta.remove();
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
     }
   }
 
@@ -64,49 +72,25 @@
     const editable =
       document.querySelector("div[aria-label='Message Body']") ||
       document.querySelector("div[role='textbox']");
-    if (!editable) { alert("Open a reply/compose box first, then click Insert Link."); return; }
+
+    if (!editable) {
+      alert("Open a reply box first, then click Insert Link.");
+      return;
+    }
+
     editable.focus();
     document.execCommand("insertText", false, "\n" + url + "\n");
-  }
-
-  function storageGetApiKey() {
-    return new Promise((resolve) => {
-      try {
-        chrome.storage.sync.get([STORAGE_KEY_NAME], (obj) => {
-          resolve((obj && obj[STORAGE_KEY_NAME]) ? String(obj[STORAGE_KEY_NAME]) : "");
-        });
-      } catch { resolve(""); }
-    });
-  }
-
-  function storageSetApiKey(key) {
-    return new Promise((resolve) => {
-      try {
-        const obj = {}; obj[STORAGE_KEY_NAME] = key;
-        chrome.storage.sync.set(obj, () => resolve(true));
-      } catch { resolve(false); }
-    });
-  }
-
-  function storageClearApiKey() {
-    return new Promise((resolve) => {
-      try { chrome.storage.sync.remove([STORAGE_KEY_NAME], () => resolve(true)); }
-      catch { resolve(false); }
-    });
   }
 
   function getSubjectText() {
     const h2 = document.querySelector("h2.hP");
     const subject = safeText(h2);
     if (subject) return subject;
+
     const alt = document.querySelector("[data-legacy-thread-id] h2");
     return safeText(alt) || "";
   }
 
-  /**
-   * Returns the last N customer message bodies (skipping SELF), from newest to older.
-   * Example: getLastCustomerMessages(2) => [latest, previous]
-   */
   function getLastCustomerMessages(n) {
     const main = document.querySelector("div[role='main']");
     if (!main) return [];
@@ -121,9 +105,13 @@
         item.querySelector("span.gD") ||
         item.querySelector("span.g2") ||
         item.querySelector("[email]");
+
       const senderText = safeText(senderEl);
 
-      const bodyEl = item.querySelector("div.a3s.aiL") || item.querySelector("div.a3s");
+      const bodyEl =
+        item.querySelector("div.a3s.aiL") ||
+        item.querySelector("div.a3s");
+
       const bodyText = safeText(bodyEl);
 
       if (!bodyText) continue;
@@ -138,20 +126,22 @@
 
   function getEmailTextForAI() {
     const subject = getSubjectText();
-    const msgs = getLastCustomerMessages(2); // [latest, previous]
+    const msgs = getLastCustomerMessages(2);
     const latest = msgs[0] || "";
     const prev = msgs[1] || "";
 
     if (latest) {
       let combined = `Subject: ${subject || "(no subject)"}\n\nLatest customer message:\n${latest}`;
-      if (prev) combined += `\n\nPrevious customer message:\n${prev}`;
+      if (prev) {
+        combined += `\n\nPrevious customer message:\n${prev}`;
+      }
       return combined.slice(0, 8000);
     }
 
     const convo = document.querySelector("div[role='main']");
     if (!convo) return "";
-    const text = (convo.innerText || "").trim();
-    return text.slice(0, 8000);
+
+    return (convo.innerText || "").trim().slice(0, 8000);
   }
 
   function looksLikeSupportEmail() {
@@ -159,29 +149,51 @@
     const msgs = getLastCustomerMessages(1);
     const latest = normalize(msgs[0] || "");
     const haystack = `${subject}\n${latest}`.trim();
+
     if (!haystack) return false;
     return SUPPORT_KEYWORDS.some(k => haystack.includes(k));
   }
 
-  async function fetchSuggestions(text, apiKey) {
+  async function fetchSuggestions(text) {
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
     try {
       const res = await fetch(SERVER, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, top_k: 3 }),
         signal: controller.signal
       });
+
       if (!res.ok) {
-        if (res.status === 401) throw new Error("401 Unauthorized (API key missing/wrong)");
         throw new Error(`Server error ${res.status}`);
       }
+
       return await res.json();
     } catch (err) {
-      if (err && err.name === "AbortError") throw new Error(`Timeout (${TIMEOUT_MS / 1000}s) — AI server not responding`);
+      if (err && err.name === "AbortError") {
+        throw new Error(`Timeout (${TIMEOUT_MS / 1000}s) — local AI server not responding`);
+      }
       throw err;
-    } finally { clearTimeout(t); }
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  async function sendFeedback(emailText, articleId) {
+    try {
+      await fetch(FEEDBACK_SERVER, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: emailText,
+          article: articleId
+        })
+      });
+    } catch (err) {
+      console.log("Feedback logging failed:", err);
+    }
   }
 
   function removePanel() {
@@ -222,20 +234,6 @@
         </button>
       </div>
 
-      <div id="kb-auth" style="margin-top:10px;padding:10px;border:1px solid #eee;border-radius:8px;background:#fafafa;display:none;">
-        <div style="font-weight:700;margin-bottom:6px;">Set API Key</div>
-        <input id="kb-key" type="password" placeholder="Paste API key"
-          style="width:100%;box-sizing:border-box;padding:8px;border:1px solid #ccc;border-radius:8px;" />
-        <div style="display:flex;gap:8px;margin-top:8px;">
-          <button id="kb-savekey" style="flex:1;padding:8px;border:none;border-radius:8px;background:#34a853;color:white;cursor:pointer;font-weight:700;">
-            Save
-          </button>
-          <button id="kb-clearkey" style="flex:1;padding:8px;border:1px solid #ccc;border-radius:8px;background:#fff;cursor:pointer;">
-            Clear
-          </button>
-        </div>
-      </div>
-
       <div style="margin-top:8px;color:#666;font-size:12px;">
         Auto-run triggers only on support-looking emails. Toggle panel: press <b>Z</b> (when not typing)
       </div>
@@ -248,24 +246,6 @@
 
     panel.querySelector("#kb-close").onclick = () => removePanel();
     panel.querySelector("#kb-run").onclick = () => runSuggestions("manual");
-
-    panel.querySelector("#kb-savekey").onclick = async () => {
-      const input = panel.querySelector("#kb-key");
-      const key = (input.value || "").trim();
-      const status = panel.querySelector("#kb-status");
-      if (!key) { status.textContent = "API key is blank."; return; }
-      await storageSetApiKey(key);
-      input.value = "";
-      await refreshAuthUI();
-      status.textContent = "API key saved.";
-    };
-
-    panel.querySelector("#kb-clearkey").onclick = async () => {
-      const status = panel.querySelector("#kb-status");
-      await storageClearApiKey();
-      await refreshAuthUI();
-      status.textContent = "API key cleared.";
-    };
 
     return panel;
   }
@@ -305,7 +285,12 @@
       `;
 
       const buttons = div.querySelectorAll("button");
-      buttons[0].onclick = () => insertIntoCompose(r.url);
+
+      buttons[0].onclick = async () => {
+        insertIntoCompose(r.url);
+        await sendFeedback(getEmailTextForAI(), r.id);
+      };
+
       buttons[1].onclick = () => copyToClipboard(r.url);
 
       results.appendChild(div);
@@ -318,24 +303,16 @@
   function computeThreadSignature() {
     const hash = window.location.hash || "";
     const subject = getSubjectText() || "";
-    const latest = (getLastCustomerMessages(1)[0] || "");
+    const latest = getLastCustomerMessages(1)[0] || "";
     const latestHead = latest.slice(0, 180);
     return `${hash}||${subject}||${latestHead}`;
   }
 
-  async function refreshAuthUI() {
+  function refreshReadyUI() {
     const panel = ensurePanel();
-    const authBox = panel.querySelector("#kb-auth");
     const status = panel.querySelector("#kb-status");
-
-    const key = await storageGetApiKey();
-
-    if (key) {
-      authBox.style.display = "none";
-      if (!status.textContent) status.textContent = "Ready.";
-    } else {
-      authBox.style.display = "block";
-      status.textContent = "API key required (set it once).";
+    if (!status.textContent) {
+      status.textContent = "Ready.";
     }
   }
 
@@ -351,13 +328,13 @@
     results.innerHTML = "";
 
     try {
-      const apiKey = await storageGetApiKey();
-      if (!apiKey) { await refreshAuthUI(); return; }
-
       const emailText = getEmailTextForAI();
-      if (!emailText) { status.textContent = "No email text found. Open an email first."; return; }
+      if (!emailText) {
+        status.textContent = "No email text found. Open an email first.";
+        return;
+      }
 
-      const data = await fetchSuggestions(emailText, apiKey);
+      const data = await fetchSuggestions(emailText);
       renderResults(data);
     } catch (e) {
       status.textContent = "Error: " + e.message;
@@ -368,10 +345,15 @@
 
   document.addEventListener("keydown", (e) => {
     if (isTypingContext(document.activeElement)) return;
+
     if (e.key && e.key.toLowerCase() === "z") {
       const existing = document.getElementById("kb-suggest-panel");
-      if (existing) removePanel();
-      else { ensurePanel(); refreshAuthUI(); }
+      if (existing) {
+        removePanel();
+      } else {
+        ensurePanel();
+        refreshReadyUI();
+      }
     }
   });
 
@@ -401,6 +383,10 @@
     }, AUTO_RUN_POLL_MS);
   }
 
-  setTimeout(() => { ensurePanel(); refreshAuthUI(); }, 3000);
+  setTimeout(() => {
+    ensurePanel();
+    refreshReadyUI();
+  }, 3000);
+
   startAutoRunLoop();
 })();

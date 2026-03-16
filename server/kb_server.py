@@ -1,9 +1,5 @@
-# kb_server.py - Local MVP server (127.0.0.1 only)
-# Keyword scoring + DEBUG printing
-# Requires env var SUPPORTASSIST_API_KEY for X-API-Key enforcement
-
+import json
 import os
-import re
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -13,75 +9,24 @@ CORS(app)
 API_KEY = os.environ.get("SUPPORTASSIST_API_KEY", "").strip()
 API_KEY_ENABLED = bool(API_KEY)
 
+FEEDBACK_FILE = "feedback.jsonl"
+INDEX_FILE = "kb_index.json"
+
+
 def api_key_ok(req):
     if not API_KEY_ENABLED:
         return True
     return req.headers.get("X-API-Key", "") == API_KEY
 
-KB = [
-    {
-        "id": "login_invalid_credentials",
-        "title": "Invalid Username or Password (Quick Checks)",
-        "url": "https://begoodiptvvpnservices.zohodesk.com/portal/en/kb/articles/invalid-username-or-password-quick-checks",
-        "keywords": [
-            "invalid","username","password","login","credentials","sign in",
-            "wrong password","cant login","can't login"
-        ],
-    },
-    {
-        "id": "buffering_speed_basics",
-        "title": "Buffering or Freezing (Speed + Quick Fixes)",
-        "url": "https://begoodiptvvpnservices.zohodesk.com/portal/en/kb/articles/buffering-or-freezing-speed-quick-fixes",
-        "keywords": [
-            "buffer","buffering","freeze","freezing","stutter","lag","slow",
-            "speed","internet","wifi","ethernet","netflix works"
-        ],
-    },
-    {
-        "id": "firestick_install_basics",
-        "title": "Firestick Install Basics (Downloader + Steps)",
-        "url": "https://begoodiptvvpnservices.zohodesk.com/portal/en/kb/articles/firestick-install-basics-downloader-steps",
-        "keywords": [
-            "firestick","fire stick","downloader","install","sideload",
-            "unknown sources","apk","android"
-        ],
-    },
-    {
-        "id": "splash_blank_screen_fix",
-        "title": "Splash Player: Blank Screen Fix",
-        "url": "https://begoodiptvvpnservices.zohodesk.com/portal/en/kb/articles/splash-player-blank-screen-fix",
-        "keywords": [
-            "blank screen","black screen","white screen","nothing shows",
-            "splash","splash player","loading forever","stuck loading"
-        ],
-    },
-]
 
-def normalize(text: str) -> str:
-    t = (text or "").lower().strip()
-    t = t.replace("\r", " ")
-    t = re.sub(r"\s+", " ", t)
-    return t
+def load_kb():
+    with open(INDEX_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data.get("articles", [])
 
-def score_article(text_norm: str, article) -> float:
-    score = 0.0
 
-    # phrase matches (multi-word) - HEAVY
-    for kw in article["keywords"]:
-        kw_norm = normalize(kw)
-        if " " in kw_norm and kw_norm in text_norm:
-            score += 0.50
+KB = load_kb()
 
-    # token matches - light
-    tokens = set(re.findall(r"[a-z0-9]+", text_norm))
-    for kw in article["keywords"]:
-        kw_norm = normalize(kw)
-        if " " not in kw_norm and kw_norm in tokens:
-            score += 0.10
-
-    if score > 0.95:
-        score = 0.95
-    return round(score, 3)
 
 def confidence_from(best_score: float, gap: float) -> str:
     if best_score >= 0.70 and gap >= 0.20:
@@ -90,46 +35,72 @@ def confidence_from(best_score: float, gap: float) -> str:
         return "MEDIUM"
     return "LOW"
 
-@app.route("/health", methods=["GET"])
-def health():
-    return jsonify({"status": "ok"}), 200
 
-@app.route("/suggest", methods=["POST"])
+@app.after_request
+def add_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-API-Key"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Private-Network"] = "true"
+    return response
+
+
+@app.route("/health", methods=["GET", "OPTIONS"])
+def health():
+    if request.method == "OPTIONS":
+        return jsonify({"ok": True}), 200
+    return jsonify({"status": "ok", "articles": len(KB)}), 200
+
+
+@app.route("/suggest", methods=["POST", "OPTIONS"])
 def suggest():
+    if request.method == "OPTIONS":
+        return jsonify({"ok": True}), 200
+
     if not api_key_ok(request):
-        return jsonify({"error": "Unauthorized (missing/invalid X-API-Key)"}), 401
+        return jsonify({"error": "Unauthorized"}), 401
 
     data = request.get_json(silent=True) or {}
-    text = (data.get("text") or "").strip()
+    text = (data.get("text") or "").strip().lower()
     top_k = int(data.get("top_k") or 3)
 
-    text_norm = normalize(text)
-
-    # ===== DEBUG PRINTS =====
-    print("\n=== /suggest ===")
-    print("RAW TEXT:", repr(text[:400]))
-    print("NORM TEXT:", repr(text_norm[:400]))
-
-    if not text_norm:
-        return jsonify({"confidence": "LOW", "best_score": 0, "gap": 0, "results": []}), 200
+    if not text:
+        return jsonify({
+            "confidence": "LOW",
+            "best_score": 0,
+            "gap": 0,
+            "results": []
+        }), 200
 
     scored = []
+
     for art in KB:
-        sc = score_article(text_norm, art)
+        score = 0.0
+
+        for tag in art.get("tags", []):
+            t = (tag or "").lower()
+            if t and t in text:
+                score += 0.50
+
+        title_words = set((art.get("norm_title") or "").split())
+        text_words = set(text.split())
+
+        for word in title_words:
+            if word and word in text_words:
+                score += 0.18
+
+        if score > 0.95:
+            score = 0.95
+
         scored.append({
-            "id": art["id"],
-            "title": art["title"],
-            "url": art["url"],
-            "score": sc
+            "id": art.get("id"),
+            "title": art.get("title"),
+            "url": art.get("url"),
+            "score": round(score, 3)
         })
 
     scored.sort(key=lambda x: x["score"], reverse=True)
     results = scored[:max(1, top_k)]
-
-    # DEBUG: print full scoring order
-    print("SCORES:")
-    for item in scored:
-        print(f"  {item['score']:>5}  {item['id']}")
 
     best_score = results[0]["score"] if results else 0
     second_score = results[1]["score"] if len(results) > 1 else 0
@@ -143,9 +114,31 @@ def suggest():
         "results": results
     }), 200
 
+
+@app.route("/feedback", methods=["POST", "OPTIONS"])
+def feedback():
+    if request.method == "OPTIONS":
+        return jsonify({"ok": True}), 200
+
+    data = request.get_json(silent=True) or {}
+
+    record = {
+        "email": data.get("email"),
+        "article": data.get("article"),
+    }
+
+    with open(FEEDBACK_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    return jsonify({"status": "logged"}), 200
+
+
 if __name__ == "__main__":
     print("KB Suggest Server running on http://127.0.0.1:8787")
     print("GET  /health")
-    print("POST /suggest  { text: '...', top_k: 3 }")
-    print(f"API key: {'ENABLED (X-API-Key required)' if API_KEY_ENABLED else 'DISABLED'}")
+    print("POST /suggest")
+    print("POST /feedback")
+    print(f"API key: {'ENABLED' if API_KEY_ENABLED else 'DISABLED'}")
+    print(f"KB articles loaded: {len(KB)}")
+
     app.run(host="127.0.0.1", port=8787, debug=False)
